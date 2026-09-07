@@ -245,7 +245,10 @@ export default function Boxes() {
       }
       if (!packId) { alert('Select or create a pack first.'); setPullSaving(false); return }
 
-      // 2. Save each card
+      // 2. Save each card. cards.quantity_owned is maintained by the
+      // trg_sync_quantity_owned trigger as SUM(pack_cards.quantity) WHERE
+      // counts_inventory, so we only ever write pack_cards here -- the trigger
+      // takes care of inventory (and correctly ignores skipInventory pulls).
       for (const item of pullItems) {
         let cardId = item.cardId
         const qty  = item.quantity
@@ -253,19 +256,22 @@ export default function Boxes() {
         if (item.mode === 'new') {
           const { data: newCard, error: cardErr } = await supabase
             .from('cards')
-            .insert({ name: item.cardName.trim(), set_name: item.setName, rarity: item.rarity, condition: item.condition, foil: item.foil, quantity_owned: pullForm.skipInventory ? 0 : qty, game_id: activeGame.id })
+            .insert({ name: item.cardName.trim(), set_name: item.setName, rarity: item.rarity, condition: item.condition, foil: item.foil, game_id: activeGame.id })
             .select('id').single()
           if (cardErr) { alert(`Card creation failed: ${cardErr.message}`); setPullSaving(false); return }
           cardId = newCard.id
-        } else if (!pullForm.skipInventory) {
-          const { data: existing, error: fetchErr } = await supabase.from('cards').select('quantity_owned').eq('id', cardId).single()
-          if (fetchErr) { alert(`Could not fetch card: ${fetchErr.message}`); setPullSaving(false); return }
-          const { error: updErr } = await supabase.from('cards').update({ quantity_owned: (existing.quantity_owned ?? 0) + qty }).eq('id', cardId)
-          if (updErr) { alert(`Inventory update failed: ${updErr.message}`); setPullSaving(false); return }
         }
 
+        // A card already logged in this pack merges additively rather than
+        // being overwritten -- otherwise re-adding a card via search (instead
+        // of editing its row in "Cards already in this pack") silently lost
+        // whatever was logged for it previously.
+        const { data: existingPc, error: pcFetchErr } = await supabase
+          .from('pack_cards').select('quantity').eq('pack_id', packId).eq('card_id', cardId).maybeSingle()
+        if (pcFetchErr) { alert(`Could not check existing pack card: ${pcFetchErr.message}`); setPullSaving(false); return }
+
         const { error: pcErr } = await supabase.from('pack_cards')
-          .upsert({ pack_id: packId, card_id: cardId, quantity: qty }, { onConflict: 'pack_id,card_id', ignoreDuplicates: false })
+          .upsert({ pack_id: packId, card_id: cardId, quantity: (existingPc?.quantity ?? 0) + qty, counts_inventory: !pullForm.skipInventory }, { onConflict: 'pack_id,card_id', ignoreDuplicates: false })
         if (pcErr) { alert(`Failed to log pull: ${pcErr.message}`); setPullSaving(false); return }
       }
 
