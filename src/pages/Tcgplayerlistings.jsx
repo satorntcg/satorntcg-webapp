@@ -5,7 +5,9 @@ import { useGame } from '../context/GameContext'
 import { gameConfig } from '../lib/games'
 
 const TCG_FEE_PCT = 0.1025
-const TCG_SHIP_DEFAULT = '5.00'
+// Default shipping tiers: cheap items ship first-class stamp rate, pricier ones bump
+// to the padded-envelope/priority rate.
+const calcShipping = (price) => (Number(price) || 0) < 20 ? 0.82 : 5.50
 const calcFee = (price) => price * TCG_FEE_PCT
 const calcNet = (price, shipping, fee) => price - fee - shipping
 const usd    = (n) => n == null ? '—' : `$${Number(n).toFixed(2)}`
@@ -24,7 +26,7 @@ function CreateModal({ cards, config, onClose, onSaved }) {
   const [cardQtys, setCardQtys]       = useState({}) // cardId -> qty per lot
   const [prices, setPrices]           = useState({})
   const [title, setTitle]             = useState('')
-  const [shipping, setShipping]       = useState(TCG_SHIP_DEFAULT)
+  const [shipping, setShipping]       = useState(String(calcShipping(0)))
   const [condition, setCondition]     = useState('Near Mint')
   const [tcgUrl, setTcgUrl]           = useState('')
   const [notes, setNotes]             = useState('')
@@ -65,6 +67,8 @@ function CreateModal({ cards, config, onClose, onSaved }) {
     const initial = {}
     selectedCards.forEach(c => { initial[c.card_id] = c.tcg_market_price ? Number(c.tcg_market_price).toFixed(2) : '' })
     setPrices(initial)
+    const projectedTotal = selectedCards.reduce((s, c) => s + (parseFloat(initial[c.card_id]) || 0) * (cardQtys[c.card_id] ?? 1), 0)
+    setShipping(String(calcShipping(projectedTotal)))
     const totalQtyInLot = selectedIds.reduce((s, id) => s + (cardQtys[id] ?? 1), 0)
     const isSingle = selectedIds.length === 1 && (cardQtys[selectedIds[0]] ?? 1) === 1
     setTitle(isSingle
@@ -296,7 +300,7 @@ function SoldModal({ listing, cards, onClose, onSaved }) {
   const isEdit = listing.status === 'sold'
   const [title, setTitle]               = useState(listing.title)
   const [soldPrice, setSoldPrice]       = useState(String(listing.sold_price ?? listing.listed_price ?? ''))
-  const [soldShipping, setSoldShipping] = useState(String(listing.sold_shipping ?? listing.shipping_cost ?? TCG_SHIP_DEFAULT))
+  const [soldShipping, setSoldShipping] = useState(String(listing.sold_shipping ?? listing.shipping_cost ?? calcShipping(listing.listed_price)))
   const [tcgUrl, setTcgUrl]             = useState(listing.tcgplayer_url || '')
   const [saving, setSaving]             = useState(false)
   const [error, setError]               = useState('')
@@ -571,7 +575,7 @@ function SoldModal({ listing, cards, onClose, onSaved }) {
 function EditModal({ listing, cards, onClose, onSaved }) {
   const [title, setTitle]           = useState(listing.title)
   const [price, setPrice]           = useState(String(listing.listed_price))
-  const [shipping, setShipping]     = useState(String(listing.shipping_cost ?? TCG_SHIP_DEFAULT))
+  const [shipping, setShipping]     = useState(String(listing.shipping_cost ?? calcShipping(listing.listed_price)))
   const [condition, setCondition]   = useState(listing.condition)
   const [quantity, setQuantity]     = useState(listing.quantity ?? 1)
   const [tcgUrl, setTcgUrl]         = useState(listing.tcgplayer_url || '')
