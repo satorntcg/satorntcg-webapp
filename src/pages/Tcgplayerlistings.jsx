@@ -4,11 +4,12 @@ import { supabase } from '../lib/supabase'
 import { useGame } from '../context/GameContext'
 import { gameConfig } from '../lib/games'
 
-const TCG_FEE_PCT = 0.1025
+const TCG_FEE_PCT = 0.1325
+const TCG_FEE_FLAT = 0.30
 // Default shipping tiers: cheap items ship first-class stamp rate, pricier ones bump
 // to the padded-envelope/priority rate.
 const calcShipping = (price) => (Number(price) || 0) < 20 ? 0.82 : 5.50
-const calcFee = (price) => price * TCG_FEE_PCT
+const calcFee = (price) => price * TCG_FEE_PCT + TCG_FEE_FLAT
 const calcNet = (price, shipping, fee) => price - fee - shipping
 const usd    = (n) => n == null ? '—' : `$${Number(n).toFixed(2)}`
 const fmtPnl = (n) => { if (n == null) return '—'; const v = Number(n); return `${v >= 0 ? '+$' : '-$'}${Math.abs(v).toFixed(2)}` }
@@ -242,7 +243,7 @@ function CreateModal({ cards, config, onClose, onSaved }) {
             {/* Fee preview */}
             {totalPrice > 0 && (
               <div className="metrics-grid mb-16" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 16 }}>
-                {[['TCGPlayer fee (10.25%)', usd(fee), ''], ['Shipping', usd(s), ''], ['Net proceeds', usd(net), net >= 0 ? 'success' : 'danger'], ['Est. profit', estProfit != null ? fmtPnl(estProfit) : '—', estProfit != null ? (estProfit >= 0 ? 'success' : 'danger') : '']].map(([label, val, cls]) => (
+                {[['TCGPlayer fee (13.25% + $0.30)', usd(fee), ''], ['Shipping', usd(s), ''], ['Net proceeds', usd(net), net >= 0 ? 'success' : 'danger'], ['Est. profit', estProfit != null ? fmtPnl(estProfit) : '—', estProfit != null ? (estProfit >= 0 ? 'success' : 'danger') : '']].map(([label, val, cls]) => (
                   <div key={label} className="metric-card">
                     <div className="metric-label">{label}</div>
                     <div className={`metric-value ${cls}`} style={{ fontSize: 18 }}>{val}</div>

@@ -29,7 +29,7 @@ Pure client-side SPA: Vite + React 18 + react-router-dom v6, talking directly to
 | `/inventory` | `Inventory.jsx` | Card list with inline edit |
 | `/alerts` | `Alerts.jsx` | Price alert review + dismiss |
 | `/listings` | `Ebaylistings.jsx` | eBay listing CRUD (2-step modal) |
-| `/tcgplayer-listings` | `Tcgplayerlistings.jsx` | TCGPlayer listing CRUD (2-step modal, 10.25% fee) |
+| `/tcgplayer-listings` | `Tcgplayerlistings.jsx` | TCGPlayer listing CRUD (2-step modal, 13.25% + $0.30 fee) |
 | `/sales` | `Sales.jsx` | Combined eBay + TCGPlayer sold-cards feed, weekly/monthly breakdown |
 | `/suggestions` | `Listingsuggestions.jsx` | AI-powered lot grouping + eBay creation |
 | `/boxes` | `Boxes.jsx` | Sealed product P&L |
@@ -51,7 +51,7 @@ Tables referenced by the UI:
 - `price_alerts` — generated alerts: `card_id, alert_type, message, old_price, new_price, pct_change, dismissed`
 - `ebay_listings` — outbound listings: `card_id, title, listed_price, shipping_cost, condition, ebay_fee, net_listed, status, ebay_url, notes, cost_basis`; sold fields: `sold_price, sold_shipping, sold_ebay_fee, net_profit, sold_at`
 - `ebay_listing_cards` — junction for multi-card listings: `listing_id, card_id, price, quantity`
-- `tcgplayer_listings` — TCGPlayer channel listings, same shape/lifecycle as `ebay_listings`: `card_id, title, listed_price, shipping_cost, condition, quantity, tcg_fee, net_listed, status, tcgplayer_url, notes, cost_basis`; sold fields: `sold_price, sold_shipping, sold_fee, net_profit, sold_at`. `tcg_fee`/`net_listed` are generated columns using a flat 10.25% commission minus `shipping_cost` (no separate payment-processing fee tracked). `shipping_cost` defaults to `$5.00`
+- `tcgplayer_listings` — TCGPlayer channel listings, same shape/lifecycle as `ebay_listings`: `card_id, title, listed_price, shipping_cost, condition, quantity, tcg_fee, net_listed, status, tcgplayer_url, notes, cost_basis`; sold fields: `sold_price, sold_shipping, sold_fee, net_profit, sold_at`. `tcg_fee`/`net_listed` are generated columns using a flat 13.25% + $0.30 commission (10.75% marketplace + 2.5% + $0.30 payment processing, TCGPlayer's standard-seller rate as of 2026-09) computed on `listed_price` only, minus `shipping_cost` for `net_listed` (see `supabase/migrations/20260905_tcgplayer_fee_update.sql`, which superseded the original flat-10.25%-no-processing-fee model). `shipping_cost` defaults to `$5.00`
 - `tcgplayer_listing_cards` — junction for multi-card TCGPlayer listings: `listing_id, card_id, price, quantity`
 - `boxes` — sealed product purchases: `name, set_name, set_code, box_type, purchase_price, pack_count, pack_msrp, purchased_at, opened_at, seller, notes, box_ref, game_id` (`box_ref` is a unique slug used for import linking)
 - `packs` — individual packs within a box: `box_id, pack_number, opened_at, notes, pack_ref` (`pack_ref` is a unique slug used for import linking)
