@@ -160,6 +160,7 @@ export default function Boxes() {
   const totalCost  = pnlBoxes.reduce((s, b) => s + Number(b.purchase_price || 0), 0)
   const totalValue = pnlBoxes.reduce((s, b) => s + Number(b.cards_market_value || 0), 0)
   const totalPnl   = totalValue - totalCost
+  const totalSpent = boxes.reduce((s, b) => s + Number(b.purchase_price || 0), 0)
 
   const totalPages   = Math.ceil(boxes.length / BOX_PAGE_SIZE)
   const safePage     = Math.min(page, Math.max(0, totalPages - 1))
@@ -363,7 +364,12 @@ export default function Boxes() {
       </div>
 
       {/* Summary metrics */}
-      <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+      <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="metric-card">
+          <div className="metric-label">Total spent</div>
+          <div className="metric-value">{usd(totalSpent)}</div>
+          <div className="metric-sub">{boxes.length} boxes, purchase price</div>
+        </div>
         <div className="metric-card">
           <div className="metric-label">Total invested</div>
           <div className="metric-value">{usd(totalCost)}</div>

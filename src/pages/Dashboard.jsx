@@ -30,6 +30,8 @@ function getUnrealizedPnl(card) {
 const pnlClass  = (v) => v == null ? 'text-muted' : v >= 0 ? 'text-success' : 'text-danger'
 const formatPnl = (v) => v != null ? `${v >= 0 ? '+' : ''}${usd(v)}` : '—'
 const usd       = (n) => n != null ? `$${Number(n).toFixed(2)}` : '—'
+// Positive = still short of recouping box spend; zero/negative = already recouped (and ahead).
+const formatRecovery = (v) => v == null ? '…' : v <= 0 ? `+${usd(-v)} surplus` : `${usd(v)} unrecovered`
 const pct       = (n) => n != null ? `${n > 0 ? '+' : ''}${Number(n).toFixed(1)}%` : '—'
 const fmtPct    = (n) => { if (n == null) return '—'; const v = Number(n); return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` }
 const fmtDate   = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
@@ -50,6 +52,7 @@ export default function Dashboard() {
   const [loading, setLoading]     = useState(true)
   const [pnl, setPnl]             = useState(null)
   const [boxCosts, setBoxCosts]   = useState(null)
+  const [allGamesStockValue, setAllGamesStockValue] = useState(null)
   const [unlinked, setUnlinked]   = useState({ ebay: 0, tcgplayer: 0 })
   const [noStock, setNoStock]     = useState({ ebay: [], tcgplayer: [] })
   const [unlinkedLoading, setUnlinkedLoading] = useState(true)
@@ -82,6 +85,24 @@ export default function Dashboard() {
     supabase.from('boxes').select('purchase_price').then(({ data }) => {
       if (data) setBoxCosts(data.reduce((s, b) => s + (b.purchase_price || 0), 0))
     })
+    // Whole-account current stock value (all games), to pair with boxCosts/pnl above which are
+    // also deliberately not game-scoped — mixing a game-scoped stock value in here would make
+    // the "incl. stock" recovery figure inconsistent with the rest of the Business P&L panel.
+    ;(async () => {
+      let rows = [], page = 0
+      while (true) {
+        const { data } = await supabase.from('v_inventory_dashboard')
+          .select('market_value, tcgplayer_market, ebay_sold_avg, quantity_owned')
+          .range(page * 1000, (page + 1) * 1000 - 1)
+        rows = [...rows, ...(data ?? [])]
+        if (!data || data.length < 1000) break
+        page++
+      }
+      const total = rows
+        .filter(c => (c.quantity_owned ?? 0) > 0)
+        .reduce((s, c) => s + (getMarketValue(c) ?? 0), 0)
+      setAllGamesStockValue(total)
+    })()
     // Two distinct problems, both meaning "this listing has no physical card behind it":
     //  - unlinked: no card_id, no card_name, no lot cards at all
     //  - noStock: linked to a real card (directly or via a lot), but that card's quantity_owned is 0
@@ -144,6 +165,16 @@ export default function Dashboard() {
   const totalNetProfit = pnl ? Number(pnl.total_net_profit) : 0
   const totalCogs       = pnl ? Number(pnl.total_cogs) : 0
   const businessProfit  = pnl && boxCosts != null ? totalNetProfit - (boxCosts - totalCogs) : null
+
+  // How much of all-time box spend hasn't been recouped by realized profit yet. Unlike
+  // businessProfit above (which nets cogs out of both sides to avoid double-counting box
+  // costs against unsold stock), this pair intentionally treats "spent" and "profit" as
+  // the user asked for them: total box spend vs. total realized profit, full stop — then
+  // the second version adds back current stock value as the more complete picture.
+  const unrecoveredSpend = pnl && boxCosts != null ? boxCosts - totalNetProfit : null
+  const unrecoveredSpendWithStock = unrecoveredSpend != null && allGamesStockValue != null
+    ? unrecoveredSpend - allGamesStockValue
+    : null
 
   if (loading) return <div className="loading">Loading dashboard…</div>
 
@@ -220,6 +251,24 @@ export default function Dashboard() {
               </div>
               <div className="metric-value" style={{ fontSize: 28, color: businessProfit == null ? 'var(--text-primary)' : businessProfit >= 0 ? 'var(--success)' : 'var(--danger)' }}>
                 {businessProfit != null ? formatPnl(businessProfit) : '…'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 4px 0', marginTop: 12, borderTop: '1px solid var(--border-mid)' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Total spent vs. total profit</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>all-time box spend − realized net profit</div>
+              </div>
+              <div className="metric-value" style={{ fontSize: 22, color: unrecoveredSpend == null ? 'var(--text-primary)' : unrecoveredSpend <= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                {formatRecovery(unrecoveredSpend)}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px 0' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>...including unsold stock</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>same, minus current market value of cards still owned</div>
+              </div>
+              <div className="metric-value" style={{ fontSize: 22, color: unrecoveredSpendWithStock == null ? 'var(--text-primary)' : unrecoveredSpendWithStock <= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                {formatRecovery(unrecoveredSpendWithStock)}
               </div>
             </div>
           </div>
