@@ -18,6 +18,13 @@ const sameCardSets = (a, b) => {
   const norm = arr => arr.map(c => `${c.id}:${c.qty ?? 1}`).sort().join(',')
   return norm(a) === norm(b)
 }
+// Matches a listing's card_ids (see v_tcgplayer_active/sold's card_ids column) against
+// v_tcgplayer_orders.matched_card_ids — card_id-only, no name-based fallback, since a
+// wrong match would point a listing at the wrong real-world order.
+const ordersForCardIds = (cardIds, orders) => {
+  if (!cardIds?.length || !orders?.length) return []
+  return orders.filter(o => (o.matched_card_ids || []).some(id => cardIds.includes(id)))
+}
 
 // ── Create modal (2-step: pick cards → set prices) ───────────
 function CreateModal({ cards, config, onClose, onSaved }) {
@@ -297,7 +304,7 @@ function CreateModal({ cards, config, onClose, onSaved }) {
 }
 
 // ── Sold modal ───────────────────────────────────────────────
-function SoldModal({ listing, cards, onClose, onSaved }) {
+function SoldModal({ listing, cards, orders, onClose, onSaved }) {
   const isEdit = listing.status === 'sold'
   const [title, setTitle]               = useState(listing.title)
   const [soldPrice, setSoldPrice]       = useState(String(listing.sold_price ?? listing.listed_price ?? ''))
@@ -448,6 +455,17 @@ function SoldModal({ listing, cards, onClose, onSaved }) {
           quantity_owned:  Math.max(0, (cardRow.quantity_owned  ?? 0) - delta),
           quantity_listed: Math.max(0, (cardRow.quantity_listed ?? 0) - delta),
         }).eq('id', cardId)
+      }
+
+      // Closing out an active listing as sold means the real-world card shipped too —
+      // auto-mark any still-pending TCGPlayer order for these cards as shipped so the
+      // Orders tab doesn't need a separate manual toggle for the common case. Only on the
+      // first-time close (isEdit = re-editing an already-sold listing, nothing new shipped).
+      if (!isEdit) {
+        const pending = ordersForCardIds(linkedCards.map(c => c.id), orders).filter(o => o.status === 'new')
+        for (const o of pending) {
+          await supabase.from('tcgplayer_orders').update({ status: 'shipped', shipped_at: new Date().toISOString() }).eq('id', o.id)
+        }
       }
 
       onSaved()
@@ -1041,6 +1059,7 @@ export default function TcgplayerListings() {
   const [listings, setListings]       = useState([])
   const [cards, setCards]             = useState([])
   const [pnl, setPnl]                 = useState(null)
+  const [tcgOrders, setTcgOrders]     = useState([])
   const [loading, setLoading]         = useState(true)
   const [showCreate, setShowCreate]   = useState(false)
   const [editTarget, setEditTarget]   = useState(null)
@@ -1102,16 +1121,21 @@ export default function TcgplayerListings() {
     // Unlinked listings (no card_id, no lot cards) have no computed game_id to match against —
     // include them under every game instead of hiding them until they're linked.
     const gameOrUnlinked = `game_id.eq.${activeGame.id},game_id.is.null`
-    const [activeRes, soldRes, pnlRes] = await Promise.all([
+    // Orders come from the Gmail-based sync (see tcgplayer_orders), which has no game_id
+    // of its own — like v_global_pnl/v_tcgplayer_pnl, this stays a whole-account list
+    // rather than being filtered to the active game.
+    const [activeRes, soldRes, pnlRes, ordersRes] = await Promise.all([
       supabase.from('v_tcgplayer_active').select('*').or(gameOrUnlinked),
       supabase.from('v_tcgplayer_sold').select('*').or(gameOrUnlinked),
       supabase.from('v_tcgplayer_pnl_by_game').select('*').eq('game_id', activeGame.id).maybeSingle(),
+      supabase.from('v_tcgplayer_orders').select('*'),
     ])
     setListings([
       ...(activeRes.data || []).map(r => ({ ...r, status: 'active' })),
       ...(soldRes.data  || []).map(r => ({ ...r, status: 'sold' })),
     ])
     setPnl(pnlRes.data)
+    setTcgOrders(ordersRes.data || [])
     setLoading(false)
   }, [activeGame.id])
 
@@ -1120,6 +1144,19 @@ export default function TcgplayerListings() {
   const onSaved = () => {
     fetchAll()
     setShowCreate(false); setEditTarget(null); setSoldTarget(null); setEndTarget(null); setLinkTarget(null); setDeleteSoldTarget(null)
+  }
+
+  const [updatingOrderId, setUpdatingOrderId] = useState(null)
+  // Manual override for orders whose Gmail sync missed a status change (e.g. shipped in person,
+  // marked shipped on TCGPlayer's site before the notification email arrived/was parsed).
+  async function toggleOrderStatus(order) {
+    const newStatus = order.status === 'shipped' ? 'new' : 'shipped'
+    const shipped_at = newStatus === 'shipped' ? new Date().toISOString() : null
+    setUpdatingOrderId(order.id)
+    const { error: err } = await supabase.from('tcgplayer_orders').update({ status: newStatus, shipped_at }).eq('id', order.id)
+    setUpdatingOrderId(null)
+    if (err) { alert(err.message); return }
+    setTcgOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: newStatus, shipped_at } : o))
   }
 
   const activeListings = listings.filter(l => l.status === 'active')
@@ -1153,6 +1190,7 @@ export default function TcgplayerListings() {
   const SortIcon = ({ col }) => <span style={{ opacity: sortBy === col ? 1 : 0.25, fontSize: 10, marginLeft: 3 }}>{sortBy === col ? (sortDir === 'asc' ? '↑' : '↓') : '⇅'}</span>
 
   const totalNetProfit = pnl ? Number(pnl.total_net_profit) : 0
+  const pendingOrdersCount = tcgOrders.filter(o => o.status === 'new').length
 
   return (
     <div className="page">
@@ -1201,7 +1239,7 @@ export default function TcgplayerListings() {
       {/* Tab bar + search */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 4 }}>
-          {[['active', `Active (${activeListings.length})`], ['sold', `Sold (${soldListings.length})`], ['pnl', 'Business P&L']].map(([id, label]) => (
+          {[['active', `Active (${activeListings.length})`], ['sold', `Sold (${soldListings.length})`], ['orders', `Orders${pendingOrdersCount ? ` (${pendingOrdersCount})` : ''}`], ['pnl', 'Business P&L']].map(([id, label]) => (
             <button key={id} className={`btn btn-sm ${tab === id ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setTab(id); setSearch('') }}>{label}</button>
           ))}
         </div>
@@ -1265,6 +1303,17 @@ export default function TcgplayerListings() {
                             <a href={l.tcgplayer_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--gold)', textDecoration: 'none', borderBottom: '1px dashed var(--gold)' }}>↗ TCGPlayer</a>
                           </div>
                         )}
+                        {(() => {
+                          const pending = ordersForCardIds(l.card_ids, tcgOrders).filter(o => o.status === 'new')
+                          if (!pending.length) return null
+                          const soonest = pending.reduce((a, b) => (a.ship_by && (!b.ship_by || a.ship_by < b.ship_by) ? a : b))
+                          const overdue = soonest.ship_by && new Date(soonest.ship_by) < new Date()
+                          return (
+                            <div style={{ marginTop: 3, fontSize: 11, padding: '2px 6px', borderRadius: 4, display: 'inline-block', background: overdue ? 'rgba(220,80,80,0.12)' : 'rgba(201,168,76,0.10)', color: overdue ? 'var(--danger)' : 'var(--gold)', border: `1px solid ${overdue ? 'rgba(220,80,80,0.3)' : 'rgba(201,168,76,0.3)'}` }}>
+                              📦 {overdue ? 'Order overdue' : 'Order pending'}{soonest.ship_by ? ` · ship by ${fmtDate(soonest.ship_by)}` : ''}
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 160 }}>
                         {l.all_card_names && l.card_count > 1
@@ -1320,6 +1369,14 @@ export default function TcgplayerListings() {
                             <a href={l.tcgplayer_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--gold)', textDecoration: 'none', borderBottom: '1px dashed var(--gold)' }}>↗ TCGPlayer</a>
                           </div>
                         )}
+                        {(() => {
+                          const matched = ordersForCardIds(l.card_ids, tcgOrders)
+                          const shipped = matched.find(o => o.status === 'shipped')
+                          const pending = matched.find(o => o.status === 'new')
+                          if (shipped) return <div style={{ marginTop: 3, fontSize: 11, color: 'var(--success)' }}>✓ Shipped {fmtDate(shipped.shipped_at)}</div>
+                          if (pending) return <div style={{ marginTop: 3, fontSize: 11, color: 'var(--gold)' }}>📦 Awaiting shipment{pending.ship_by ? ` · ship by ${fmtDate(pending.ship_by)}` : ''}</div>
+                          return null
+                        })()}
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 160 }}>
                         {l.all_card_names && l.card_count > 1
@@ -1344,6 +1401,75 @@ export default function TcgplayerListings() {
                   )})}</tbody>
                 </>
               )}
+            </table>
+          </div>
+        )
+      )}
+
+      {/* ── Orders tab (real TCGplayer orders, synced from Gmail — see tcgplayer_orders) ── */}
+      {tab === 'orders' && (
+        loading ? <div className="loading">Loading orders…</div> :
+        tcgOrders.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon">📦</div>
+            No TCGPlayer orders synced yet.
+          </div>
+        ) : (
+          <div className="panel">
+            <table className="data-table">
+              <thead><tr>
+                <th>Order</th>
+                <th>Items</th>
+                <th className="text-right">Total</th>
+                <th>Status</th>
+                <th>Ship by</th>
+                <th>Ordered</th>
+                <th>Shipped</th>
+                <th></th>
+              </tr></thead>
+              <tbody>{tcgOrders.map(o => {
+                const overdue = o.status === 'new' && o.ship_by && new Date(o.ship_by) < new Date()
+                const badgeColor = o.status === 'shipped' ? 'var(--success)' : overdue ? 'var(--danger)' : 'var(--gold)'
+                const badgeBg    = o.status === 'shipped' ? 'rgba(76,175,110,0.10)' : overdue ? 'rgba(220,80,80,0.12)' : 'rgba(201,168,76,0.10)'
+                const badgeBorder = o.status === 'shipped' ? 'rgba(76,175,110,0.3)' : overdue ? 'rgba(220,80,80,0.3)' : 'rgba(201,168,76,0.3)'
+                return (
+                  <tr key={o.id}>
+                    <td className="name-cell">{o.order_number}</td>
+                    <td style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 220 }}>
+                      {o.all_item_names || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                      {o.unmatched_item_count > 0 && (
+                        <div className="set-cell" style={{ color: 'var(--text-muted)' }}>
+                          {o.unmatched_item_count} item{o.unmatched_item_count !== 1 ? 's' : ''} not matched to a card
+                        </div>
+                      )}
+                    </td>
+                    <td className="text-right text-gold">{usd(o.order_total)}</td>
+                    <td>
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: badgeBg, color: badgeColor, border: `1px solid ${badgeBorder}` }}>
+                        {o.status === 'shipped' ? 'Shipped' : overdue ? 'Overdue' : 'Ready to ship'}
+                      </span>
+                    </td>
+                    <td className="text-muted" style={{ fontSize: 12 }}>{fmtDate(o.ship_by)}</td>
+                    <td className="text-muted" style={{ fontSize: 12 }}>{fmtDate(o.ordered_at)}</td>
+                    <td className="text-muted" style={{ fontSize: 12 }}>{fmtDate(o.shipped_at)}</td>
+                    <td>
+                      <div className="flex gap-8" style={{ alignItems: 'center' }}>
+                        {o.manage_order_url && (
+                          <a href={o.manage_order_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--gold)', textDecoration: 'none', borderBottom: '1px dashed var(--gold)' }}>↗ Manage</a>
+                        )}
+                        <button
+                          className="btn btn-sm btn-ghost"
+                          disabled={updatingOrderId === o.id}
+                          onClick={() => toggleOrderStatus(o)}
+                          title="Manually override status (Gmail sync normally sets this)"
+                        >
+                          {o.status === 'shipped' ? 'Mark not shipped' : 'Mark shipped'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}</tbody>
             </table>
           </div>
         )
@@ -1386,7 +1512,7 @@ export default function TcgplayerListings() {
       {/* Modals */}
       {showCreate && <CreateModal cards={cards} config={config} onClose={() => setShowCreate(false)} onSaved={onSaved} />}
       {editTarget  && <EditModal  listing={editTarget} cards={cards} onClose={() => setEditTarget(null)} onSaved={onSaved} />}
-      {soldTarget  && <SoldModal  listing={soldTarget} cards={cards} onClose={() => setSoldTarget(null)} onSaved={onSaved} />}
+      {soldTarget  && <SoldModal  listing={soldTarget} cards={cards} orders={tcgOrders} onClose={() => setSoldTarget(null)} onSaved={onSaved} />}
       {endTarget   && <EndModal   listing={endTarget}  onClose={() => setEndTarget(null)}  onSaved={onSaved} />}
       {linkTarget  && <LinkCardModal listing={linkTarget} cards={cards} onClose={() => setLinkTarget(null)} onSaved={onSaved} />}
       {deleteSoldTarget && <DeleteSoldModal listing={deleteSoldTarget} onClose={() => setDeleteSoldTarget(null)} onSaved={onSaved} />}

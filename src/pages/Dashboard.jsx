@@ -108,14 +108,29 @@ export default function Dashboard() {
     //  - noStock: linked to a real card (directly or via a lot), but that card's quantity_owned is 0
     // Not game-scoped since unlinked rows have no computed game_id, and a listing can outlive
     // whichever game happens to be active.
+    async function loadAllCardStock() {
+      // Same 1000-row PostgREST page cap the other Dashboard/Inventory/listing queries paginate
+      // around (see the v_inventory_dashboard loops above) — without this, cards past the first
+      // page were missing from ownedMap and fell back to 0, wrongly flagging owned cards as
+      // out-of-stock in the panel below.
+      let rows = [], page = 0
+      while (true) {
+        const { data } = await supabase.from('cards').select('id, quantity_owned')
+          .range(page * 1000, (page + 1) * 1000 - 1)
+        rows = [...rows, ...(data ?? [])]
+        if (!data || data.length < 1000) break
+        page++
+      }
+      return rows
+    }
     Promise.all([
       supabase.from('v_ebay_active').select('id, title, card_id, card_name, all_card_names, card_count'),
       supabase.from('v_tcgplayer_active').select('id, title, card_id, card_name, all_card_names, card_count'),
       supabase.from('ebay_listing_cards').select('listing_id, card_id'),
       supabase.from('tcgplayer_listing_cards').select('listing_id, card_id'),
-      supabase.from('cards').select('id, quantity_owned'),
-    ]).then(([ebayRes, tcgRes, ebayLcRes, tcgLcRes, cardsRes]) => {
-      const ownedMap = new Map((cardsRes.data ?? []).map(c => [c.id, c.quantity_owned ?? 0]))
+      loadAllCardStock(),
+    ]).then(([ebayRes, tcgRes, ebayLcRes, tcgLcRes, cardRows]) => {
+      const ownedMap = new Map(cardRows.map(c => [c.id, c.quantity_owned ?? 0]))
       const lotCardsByListing = (rows) => {
         const m = new Map()
         for (const r of rows ?? []) {
