@@ -2711,7 +2711,12 @@ function fetchJson_(url) {
         headers: {
 
           "Accept":
-            "application/json"
+            "application/json",
+
+          // tcgcsv.com started rejecting requests without an identifying
+          // User-Agent on 2026-09-18 ("Your User-Agent has been blocked").
+          "User-Agent":
+            "SatornTCG-PricePipeline/1.0"
 
         },
 
