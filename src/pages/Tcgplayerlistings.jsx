@@ -464,7 +464,11 @@ function SoldModal({ listing, cards, orders, onClose, onSaved }) {
       if (!isEdit) {
         const pending = ordersForCardIds(linkedCards.map(c => c.id), orders).filter(o => o.status === 'new')
         for (const o of pending) {
-          await supabase.from('tcgplayer_orders').update({ status: 'shipped', shipped_at: new Date().toISOString() }).eq('id', o.id)
+          const { error: orderErr } = await supabase
+            .from('tcgplayer_orders')
+            .update({ status: 'shipped', shipped_at: new Date().toISOString() })
+            .eq('id', o.id)
+          if (orderErr) throw orderErr
         }
       }
 
@@ -1153,9 +1157,14 @@ export default function TcgplayerListings() {
     const newStatus = order.status === 'shipped' ? 'new' : 'shipped'
     const shipped_at = newStatus === 'shipped' ? new Date().toISOString() : null
     setUpdatingOrderId(order.id)
-    const { error: err } = await supabase.from('tcgplayer_orders').update({ status: newStatus, shipped_at }).eq('id', order.id)
+    const { data, error: err } = await supabase
+      .from('tcgplayer_orders')
+      .update({ status: newStatus, shipped_at })
+      .eq('id', order.id)
+      .select('id')
     setUpdatingOrderId(null)
     if (err) { alert(err.message); return }
+    if (!data?.length) { alert('Order status was not updated — no matching order row (it may have been removed or you may not have permission).'); return }
     setTcgOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: newStatus, shipped_at } : o))
   }
 
