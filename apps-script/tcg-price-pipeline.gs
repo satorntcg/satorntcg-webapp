@@ -2698,41 +2698,62 @@ function getTargetGroups_(
 
 function fetchJson_(url) {
 
-  const res =
-    UrlFetchApp.fetch(
+  // Daily time-driven triggers across many Apps Script projects tend to
+  // fire in the same early-morning window, and tcgcsv.com has started
+  // intermittently rate-limiting/blocking that scheduled-trigger traffic
+  // (401 "Your User-Agent has been blocked") even with a valid User-Agent
+  // set — manual editor runs at other times are unaffected. Retry a
+  // couple of times with backoff before giving up.
+  const maxAttempts = 3;
 
-      url,
+  let lastError;
 
-      {
-
-        method:
-          "get",
-
-        headers: {
-
-          "Accept":
-            "application/json",
-
-          // tcgcsv.com started rejecting requests without an identifying
-          // User-Agent on 2026-09-18 ("Your User-Agent has been blocked").
-          "User-Agent":
-            "SatornTCG-PricePipeline/1.0"
-
-        },
-
-        muteHttpExceptions:
-          true
-
-      }
-
-    );
-
-
-  if (
-    res.getResponseCode() !== 200
+  for (
+    let attempt = 1;
+    attempt <= maxAttempts;
+    attempt++
   ) {
 
-    throw new Error(
+    const res =
+      UrlFetchApp.fetch(
+
+        url,
+
+        {
+
+          method:
+            "get",
+
+          headers: {
+
+            "Accept":
+              "application/json",
+
+            "User-Agent":
+              "SatornTCG-PricePipeline/1.0"
+
+          },
+
+          muteHttpExceptions:
+            true
+
+        }
+
+      );
+
+
+    if (
+      res.getResponseCode() === 200
+    ) {
+
+      return JSON.parse(
+        res.getContentText()
+      );
+
+    }
+
+
+    lastError = new Error(
 
       `Failed request ` +
       `(${res.getResponseCode()}): ` +
@@ -2741,12 +2762,28 @@ function fetchJson_(url) {
 
     );
 
+    const retryable =
+      res.getResponseCode() === 401 ||
+      res.getResponseCode() === 429 ||
+      res.getResponseCode() >= 500;
+
+    if (
+      !retryable ||
+      attempt === maxAttempts
+    ) {
+
+      throw lastError;
+
+    }
+
+    Utilities.sleep(
+      1000 * attempt
+    );
+
   }
 
 
-  return JSON.parse(
-    res.getContentText()
-  );
+  throw lastError;
 
 }
 
