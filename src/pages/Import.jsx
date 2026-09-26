@@ -126,17 +126,21 @@ async function runImport(cardRows, onLog, config, gameId) {
       if (link) { onLog('info', `Skipped (exists): ${card.name} → ${packRef}`); skipped++; continue }
     }
 
-    // Insert card if new, otherwise increment quantity
+    // Insert card if new, otherwise increment quantity. When linking to a pack,
+    // the pack_cards insert below adds the copy via trg_sync_quantity_owned,
+    // so don't also count it here.
     let cardId
     if (existing) {
       cardId = existing.id
-      const { error } = await supabase.from('cards')
-        .update({ quantity_owned: Number(existing.quantity_owned ?? 0) + 1 }).eq('id', cardId)
-      if (error) { onLog('error', `Card quantity (${card.name}): ${error.message}`); errorCount++; continue }
+      if (!packId) {
+        const { error } = await supabase.from('cards')
+          .update({ quantity_owned: Number(existing.quantity_owned ?? 0) + 1 }).eq('id', cardId)
+        if (error) { onLog('error', `Card quantity (${card.name}): ${error.message}`); errorCount++; continue }
+      }
       onLog('info', `Linked: ${card.name} → ${packRef ?? 'no pack'}`)
       updatedCount++
     } else {
-      const { data, error } = await supabase.from('cards').insert({ ...card, quantity_owned: 1, game_id: gameId }).select('id').single()
+      const { data, error } = await supabase.from('cards').insert({ ...card, quantity_owned: packId ? 0 : 1, game_id: gameId }).select('id').single()
       if (error) { onLog('error', `Card (${card.name}): ${error.message}`); errorCount++; continue }
       cardId = data.id
       onLog('success', `Added: ${card.name} (${card.rarity})`)

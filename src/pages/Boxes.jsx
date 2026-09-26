@@ -246,10 +246,10 @@ export default function Boxes() {
       }
       if (!packId) { alert('Select or create a pack first.'); setPullSaving(false); return }
 
-      // 2. Save each card. cards.quantity_owned is maintained by the
-      // trg_sync_quantity_owned trigger as SUM(pack_cards.quantity) WHERE
-      // counts_inventory, so we only ever write pack_cards here -- the trigger
-      // takes care of inventory (and correctly ignores skipInventory pulls).
+      // 2. Save each card. The trg_sync_quantity_owned trigger adds each
+      // counts_inventory pack_cards quantity change onto cards.quantity_owned,
+      // so we only ever write pack_cards here -- the trigger takes care of
+      // inventory (and correctly ignores skipInventory pulls).
       for (const item of pullItems) {
         let cardId = item.cardId
         const qty  = item.quantity
@@ -304,11 +304,7 @@ export default function Boxes() {
     if (askConfirm && !confirm(`Remove ${row.cards?.name ?? 'this card'} (×${row.quantity}) from this pack and inventory?`)) return
     const packId = pullForm.packId
     try {
-      const { data: existing, error: fetchErr } = await supabase.from('cards').select('quantity_owned').eq('id', row.card_id).single()
-      if (fetchErr) { alert(`Could not fetch card: ${fetchErr.message}`); return }
-      const newOwned = Math.max(0, (existing.quantity_owned ?? 0) - row.quantity)
-      const { error: updErr } = await supabase.from('cards').update({ quantity_owned: newOwned }).eq('id', row.card_id)
-      if (updErr) { alert(`Inventory update failed: ${updErr.message}`); return }
+      // trg_sync_quantity_owned subtracts this row's quantity from inventory.
       const { error: delErr } = await supabase.from('pack_cards').delete().eq('pack_id', packId).eq('card_id', row.card_id)
       if (delErr) { alert(`Failed to remove card from pack: ${delErr.message}`); return }
       loadExistingPackCards(packId)
@@ -324,13 +320,8 @@ export default function Boxes() {
     const newQty = parseInt(newQtyRaw)
     if (Number.isNaN(newQty) || newQty === row.quantity) return
     if (newQty <= 0) { await removeExistingPackCard(row, false); return }
-    const delta = newQty - row.quantity
     try {
-      const { data: existing, error: fetchErr } = await supabase.from('cards').select('quantity_owned').eq('id', row.card_id).single()
-      if (fetchErr) { alert(`Could not fetch card: ${fetchErr.message}`); return }
-      const newOwned = Math.max(0, (existing.quantity_owned ?? 0) + delta)
-      const { error: updErr } = await supabase.from('cards').update({ quantity_owned: newOwned }).eq('id', row.card_id)
-      if (updErr) { alert(`Inventory update failed: ${updErr.message}`); return }
+      // trg_sync_quantity_owned applies the quantity delta to inventory.
       const { error: pcErr } = await supabase.from('pack_cards').update({ quantity: newQty }).eq('pack_id', pullForm.packId).eq('card_id', row.card_id)
       if (pcErr) { alert(`Failed to update pack card: ${pcErr.message}`); return }
       loadExistingPackCards(pullForm.packId)

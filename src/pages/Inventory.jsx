@@ -294,11 +294,16 @@ export default function Inventory() {
 
     let error
     if (modal === 'add') {
-      const res = await supabase.from('cards').insert({ ...payload, game_id: activeGame.id }).select('id').single()
+      // When linking the new card to a pack, the pack_cards insert below adds
+      // its quantity to quantity_owned via trg_sync_quantity_owned -- start
+      // the card at 0 so it isn't counted twice.
+      const addQty = payload.quantity_owned
+      const linkPack = addQty > 0 && (selPackId || selBoxId)
+      const res = await supabase.from('cards').insert({ ...payload, quantity_owned: linkPack ? 0 : addQty, game_id: activeGame.id }).select('id').single()
       error = res.error
       if (!error && res.data?.id) {
-        let packId = selPackId
-        if (!packId && selBoxId) {
+        let packId = linkPack ? selPackId : null
+        if (linkPack && !packId && selBoxId) {
           const { data: newPack } = await supabase
             .from('packs')
             .insert({ box_id: selBoxId, pack_number: newPackNumber })
@@ -307,20 +312,15 @@ export default function Inventory() {
           packId = newPack?.id
         }
         if (packId) {
-          await supabase.from('pack_cards').insert({ pack_id: packId, card_id: res.data.id })
+          await supabase.from('pack_cards').insert({ pack_id: packId, card_id: res.data.id, quantity: addQty })
         }
       }
     } else {
+      // Editing quantity_owned is a direct inventory correction -- pull history
+      // in pack_cards is left alone (it still drives box P&L), and deleting
+      // rows here would make trg_sync_quantity_owned subtract them a second time.
       const res = await supabase.from('cards').update(payload).eq('id', form.id)
       error = res.error
-      if (!error) {
-        const newQty = parseInt(form.quantity_owned) || 0
-        const { data: links } = await supabase.from('pack_cards')
-          .select('id').eq('card_id', form.id).order('created_at', { ascending: false })
-        if (links && links.length > newQty) {
-          await supabase.from('pack_cards').delete().in('id', links.slice(newQty).map(l => l.id))
-        }
-      }
     }
 
     setSaving(false)
