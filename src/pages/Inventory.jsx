@@ -150,17 +150,21 @@ export default function Inventory() {
 
   async function load() {
     setLoading(true)
-    // Fetch all cards in batches to bypass the 1000-row default limit
-    let allCards = [], batchPage = 0
-    while (true) {
-      const { data } = await supabase.from('v_inventory_dashboard').select('*').eq('game_id', activeGame.id).order('name')
-        .range(batchPage * 1000, (batchPage + 1) * 1000 - 1)
-      allCards = [...allCards, ...(data ?? [])]
-      if (!data || data.length < 1000) break
-      batchPage++
+    // Fetch in batches to bypass the 1000-row default limit (pack_cards outgrew it too,
+    // which silently dropped provenance for some cards)
+    const fetchAllPages = async (buildQuery) => {
+      let rows = [], batchPage = 0
+      while (true) {
+        const { data } = await buildQuery().range(batchPage * 1000, (batchPage + 1) * 1000 - 1)
+        rows = [...rows, ...(data ?? [])]
+        if (!data || data.length < 1000) break
+        batchPage++
+      }
+      return rows
     }
-    const [{ data: packLinks }] = await Promise.all([
-      supabase.from('pack_cards').select('card_id, quantity, packs(pack_number, pack_ref, boxes(name, set_name))'),
+    const [allCards, packLinks] = await Promise.all([
+      fetchAllPages(() => supabase.from('v_inventory_dashboard').select('*').eq('game_id', activeGame.id).order('name')),
+      fetchAllPages(() => supabase.from('pack_cards').select('card_id, quantity, packs(pack_number, pack_ref, boxes(name, set_name))').order('id')),
     ])
     setCards(allCards)
 

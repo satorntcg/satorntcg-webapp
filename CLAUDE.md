@@ -71,7 +71,7 @@ Enums used in inserts (must match the DB):
 
 Views the UI reads from (heavier joins/aggregations live in Postgres, not the client):
 - `v_inventory_dashboard` — cards joined with latest prices, `market_value`, `unrealized_pnl`, `quantity_listed`, `quantity_available`, `active_listing_count`
-- `v_latest_prices` — most recent price snapshot per card
+- `v_latest_prices` — most recent price snapshot per card. Picks it with a `LEFT JOIN LATERAL (... ORDER BY checked_at DESC LIMIT 1)` per card, which uses `idx_snapshots_card_time`; don't revert to `DISTINCT ON (card_id)` over `price_snapshots`, which sorts the whole ~350k-row (and growing) table on every query. Likewise `v_inventory_dashboard` has no `DISTINCT ON`/`ORDER BY` so `.eq('game_id', ...)` pushes down into it — callers order explicitly. See `supabase/migrations/20261007_fast_latest_prices.sql`.
 - `v_active_alerts` — undismissed alerts joined with card info
 - `v_box_pnl` — boxes with `cards_market_value`, `gross_pnl`
 - `v_youtube_opening_summary` — openings joined with pack/card aggregates: `total_tcg_value`, `opening_pnl`, `packs_cost`, `packs_in_video`, `pack_msrp`, `pack_count`, `box_name`, `set_name`
