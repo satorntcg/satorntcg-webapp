@@ -11,6 +11,7 @@ import EbayListings from './pages/Ebaylistings'
 import TcgplayerListings from './pages/Tcgplayerlistings'
 import Sales from './pages/Sales'
 import Boxes from './pages/Boxes'
+import Profit from './pages/Profit'
 import Market from './pages/Market'
 import Settings from './pages/Settings'
 import Import from './pages/Import'
@@ -111,6 +112,7 @@ export default function App() {
           <Route path="/tcgplayer-listings" element={<TcgplayerListings />} />
           <Route path="/sales"       element={<Sales />} />
           <Route path="/boxes"       element={<Boxes />} />
+          <Route path="/profit"      element={<Profit />} />
           <Route path="/market"      element={<Market />} />
           <Route path="/youtube"     element={<YouTube />} />
           <Route path="/import"      element={<Import />} />

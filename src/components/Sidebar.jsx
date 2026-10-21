@@ -19,6 +19,7 @@ const NAV = [
       { to: '/sales',        label: 'Sales',               icon: <SalesIcon /> },
       { to: '/suggestions',  label: 'Listing Suggestions', icon: <SparkleIcon /> },
       { to: '/boxes',        label: 'Boxes & P&L',         icon: <BoxIcon /> },
+      { to: '/profit',       label: 'Profit',              icon: <ProfitIcon /> },
       { to: '/boxev',        label: 'Box EV',              icon: <BoxEvIcon /> },
     ],
   },
@@ -134,4 +135,5 @@ function YoutubeIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="cur
 function BookIcon()  { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg> }
 function BoxEvIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg> }
 function TcgIcon()  { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><path d="M8 12h8M12 8v8"/></svg> }
+function ProfitIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg> }
 function SalesIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg> }
