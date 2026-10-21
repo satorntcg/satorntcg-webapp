@@ -9,7 +9,7 @@ const cap    = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 
 const EBAY_FEE_PCT  = 0.129
 const EBAY_FEE_FLAT = 0.30
-const DEFAULT_SHIP  = 5.00
+const DEFAULT_SHIP  = 5.50
 const calcNet = (price) => price - (price * EBAY_FEE_PCT + EBAY_FEE_FLAT) - DEFAULT_SHIP
 
 const SOLO_COLORS = ['var(--gold-light)', 'var(--gold)', '#C9A84C', '#B08D3A']

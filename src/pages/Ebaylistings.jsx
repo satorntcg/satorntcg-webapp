@@ -26,7 +26,7 @@ function CreateModal({ cards, config, onClose, onSaved }) {
   const [cardQtys, setCardQtys]       = useState({}) // cardId -> qty per lot
   const [prices, setPrices]           = useState({})
   const [title, setTitle]             = useState('')
-  const [shipping, setShipping]       = useState('4.00')
+  const [shipping, setShipping]       = useState('5.50')
   const [condition, setCondition]     = useState('Near Mint')
   const [ebayUrl, setEbayUrl]         = useState('')
   const [notes, setNotes]             = useState('')
