@@ -10,7 +10,10 @@ const date   = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'shor
 const BOX_TYPES  = ['booster_box', 'prerelease_kit', 'single_booster', 'bundle', 'other']
 const CONDITIONS = ['near_mint', 'lightly_played', 'moderately_played', 'heavily_played', 'damaged']
 
-const BLANK = { name: '', set_name: '', box_type: 'booster_box', purchase_price: '', pack_count: '36', pack_msrp: '5', purchased_at: '', seller: '', notes: '' }
+const BLANK = { name: '', set_name: '', box_type: 'booster_box', purchase_price: '', box_count: '1', packs_per_box: '36', pack_msrp: '5', purchased_at: '', seller: '', notes: '' }
+
+// Packs per sealed box for an entry, keeping the stored ratio (falls back to 36)
+const packsPerBox = (b) => Math.round(Number(b?.pack_count) / (Number(b?.box_count) || 1)) || 36
 
 const PULL_BLANK = {
   mode:             'search',   // 'search' | 'new'
@@ -35,9 +38,16 @@ export default function Boxes() {
   const [modal,        setModal]        = useState(false)
   const [form,         setForm]         = useState(BLANK)
   const [saving,       setSaving]       = useState(false)
+  const [editing,      setEditing]      = useState(null)   // { id, purchasedDate } when the box modal is editing
   const [selected,     setSelected]     = useState(null)
   const [boxCards,     setBoxCards]     = useState([])
   const [cardsLoading, setCardsLoading] = useState(false)
+
+  // box_count / exclude_from_pnl live on `boxes` only (not v_box_pnl) and need box_tracking_fix.sql
+  const [hasTracking,  setHasTracking]  = useState(true)
+  const [showExcluded, setShowExcluded] = useState(false)
+  const [boxCountDraft, setBoxCountDraft] = useState('')
+  const [boxCountSaving, setBoxCountSaving] = useState(false)
 
   // Pull modal
   const [pullModal,    setPullModal]    = useState(false)
@@ -57,12 +67,24 @@ export default function Boxes() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase
-      .from('v_box_pnl')
-      .select('*')
-      .eq('game_id', activeGame.id)
-      .order('purchased_at', { ascending: false })
-    setBoxes(data ?? [])
+    const [{ data }, { data: tracking, error: trackingErr }] = await Promise.all([
+      supabase
+        .from('v_box_pnl')
+        .select('*')
+        .eq('game_id', activeGame.id)
+        .order('purchased_at', { ascending: false }),
+      supabase
+        .from('boxes')
+        .select('id, box_count, exclude_from_pnl')
+        .eq('game_id', activeGame.id),
+    ])
+    setHasTracking(!trackingErr)
+    const trackMap = new Map((trackingErr ? [] : tracking ?? []).map(t => [t.id, t]))
+    setBoxes((data ?? []).map(b => ({
+      ...b,
+      box_count: trackMap.get(b.id)?.box_count ?? 1,
+      exclude_from_pnl: trackMap.get(b.id)?.exclude_from_pnl ?? false,
+    })))
     setLoading(false)
   }
 
@@ -156,38 +178,100 @@ export default function Boxes() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const pnlBoxes   = boxes.filter(b => (b.distinct_cards_pulled ?? 0) > 0)
-  const totalCost  = pnlBoxes.reduce((s, b) => s + Number(b.purchase_price || 0), 0)
-  const totalValue = pnlBoxes.reduce((s, b) => s + Number(b.cards_market_value || 0), 0)
-  const totalPnl   = totalValue - totalCost
-  const totalSpent = boxes.reduce((s, b) => s + Number(b.purchase_price || 0), 0)
+  // Summary totals only ever count boxes that aren't excluded from P&L
+  const includedBoxes = boxes.filter(b => !b.exclude_from_pnl)
+  const excludedCount = boxes.length - includedBoxes.length
+  const sealedBoxes   = includedBoxes.reduce((s, b) => s + Number(b.box_count || 1), 0)
+  const totalInvested = includedBoxes.reduce((s, b) => s + Number(b.purchase_price || 0), 0)
+  const totalValue    = includedBoxes.reduce((s, b) => s + Number(b.cards_market_value || 0), 0)
+  const valuePerBox   = sealedBoxes > 0 ? totalValue / sealedBoxes : null
+  const totalPnl      = totalValue - totalInvested
 
-  const totalPages   = Math.ceil(boxes.length / BOX_PAGE_SIZE)
+  const visibleBoxes = showExcluded ? boxes : includedBoxes
+  const totalPages   = Math.ceil(visibleBoxes.length / BOX_PAGE_SIZE)
   const safePage     = Math.min(page, Math.max(0, totalPages - 1))
-  const pagedBoxes   = boxes.slice(safePage * BOX_PAGE_SIZE, (safePage + 1) * BOX_PAGE_SIZE)
+  const pagedBoxes   = visibleBoxes.slice(safePage * BOX_PAGE_SIZE, (safePage + 1) * BOX_PAGE_SIZE)
 
   const selectedBox = boxes.find(b => b.id === selected)
+  useEffect(() => { setBoxCountDraft(selectedBox ? String(selectedBox.box_count ?? 1) : '') }, [selected, selectedBox?.box_count])
   const f = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }))
   const pf = (field, val) => setPullForm(prev => ({ ...prev, [field]: val !== undefined ? val : prev[field] }))
 
+  function openAddModal() {
+    setEditing(null)
+    setForm({ ...BLANK, set_name: config.defaultSet })
+    setModal(true)
+  }
+
+  async function openEditModal(boxId) {
+    const { data, error } = await supabase.from('boxes').select('*').eq('id', boxId).single()
+    if (error) { alert(`Couldn't load box: ${error.message}`); return }
+    const purchasedDate = data.purchased_at ? data.purchased_at.slice(0, 10) : ''
+    setEditing({ id: boxId, purchasedDate })
+    setForm({
+      name:           data.name ?? '',
+      set_name:       data.set_name ?? config.defaultSet,
+      box_type:       data.box_type ?? 'booster_box',
+      purchase_price: data.purchase_price ?? '',
+      box_count:      String(data.box_count ?? 1),
+      packs_per_box:  String(packsPerBox(data)),
+      pack_msrp:      data.pack_msrp ?? '',
+      purchased_at:   purchasedDate,
+      seller:         data.seller ?? '',
+      notes:          data.notes ?? '',
+    })
+    setModal(true)
+  }
+
   async function save() {
     setSaving(true)
-    const { error } = await supabase.from('boxes').insert({
+    const boxCount = parseInt(form.box_count) || 1
+    const payload = {
       name:           form.name?.trim() || null,
       set_name:       form.set_name,
       box_type:       form.box_type,
       purchase_price: Number(form.purchase_price),
-      pack_count:     parseInt(form.pack_count) || 36,
+      pack_count:     boxCount * (parseInt(form.packs_per_box) || 36),
       pack_msrp:      parseFloat(form.pack_msrp) || 5,
-      purchased_at:   form.purchased_at ? new Date(form.purchased_at).toISOString() : new Date().toISOString(),
       seller:         form.seller || null,
       notes:          form.notes || null,
-      game_id:        activeGame.id,
-    })
+    }
+    if (hasTracking) payload.box_count = boxCount
+    let error
+    if (editing) {
+      // Only rewrite purchased_at if the date was changed, so an untouched edit keeps the original timestamp
+      if (form.purchased_at !== editing.purchasedDate) {
+        payload.purchased_at = form.purchased_at ? new Date(form.purchased_at).toISOString() : null
+      }
+      ;({ error } = await supabase.from('boxes').update(payload).eq('id', editing.id))
+    } else {
+      payload.purchased_at = form.purchased_at ? new Date(form.purchased_at).toISOString() : new Date().toISOString()
+      payload.game_id = activeGame.id
+      ;({ error } = await supabase.from('boxes').insert(payload))
+    }
     setSaving(false)
     if (error) { alert(`Save failed: ${error.message}`); return }
     setModal(false)
+    setEditing(null)
     setForm(BLANK)
+    load()
+  }
+
+  async function saveBoxCount() {
+    const n = parseInt(boxCountDraft)
+    if (!selectedBox || !n || n < 1) return
+    setBoxCountSaving(true)
+    const perBox = packsPerBox(selectedBox)
+    const { error } = await supabase.from('boxes').update({ box_count: n, pack_count: n * perBox }).eq('id', selectedBox.id)
+    setBoxCountSaving(false)
+    if (error) { alert(`Save failed: ${error.message}`); return }
+    load()
+  }
+
+  async function toggleExcluded() {
+    if (!selectedBox) return
+    const { error } = await supabase.from('boxes').update({ exclude_from_pnl: !selectedBox.exclude_from_pnl }).eq('id', selectedBox.id)
+    if (error) { alert(`Update failed: ${error.message}`); return }
     load()
   }
 
@@ -349,22 +433,33 @@ export default function Boxes() {
       <div className="page-header flex-between">
         <div>
           <h1 className="page-title">Boxes & P&L</h1>
-          <p className="page-subtitle">{boxes.length} boxes tracked</p>
+          <p className="page-subtitle">
+            {boxes.length} entries · {sealedBoxes} boxes in P&L{excludedCount > 0 ? ` · ${excludedCount} excluded` : ''}
+          </p>
         </div>
-        <button className="btn btn-primary" onClick={() => { setForm({ ...BLANK, set_name: config.defaultSet }); setModal(true) }}>+ Add box</button>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          {excludedCount > 0 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)' }}>
+              <input type="checkbox" checked={showExcluded} onChange={e => setShowExcluded(e.target.checked)} style={{ width: 14, height: 14, accentColor: 'var(--gold)' }} />
+              Show excluded
+            </label>
+          )}
+          <button className="btn btn-primary" onClick={openAddModal}>+ Add box</button>
+        </div>
       </div>
+
+      {!hasTracking && (
+        <div className="panel" style={{ padding: '10px 14px', marginBottom: 16, fontSize: 12, color: 'var(--text-secondary)', borderColor: 'var(--gold)' }}>
+          ⚠ Run box_tracking_fix.sql in Supabase to enable box counts and P&L exclusions.
+        </div>
+      )}
 
       {/* Summary metrics */}
       <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="metric-card">
-          <div className="metric-label">Total spent</div>
-          <div className="metric-value">{usd(totalSpent)}</div>
-          <div className="metric-sub">{boxes.length} boxes, purchase price</div>
-        </div>
-        <div className="metric-card">
           <div className="metric-label">Total invested</div>
-          <div className="metric-value">{usd(totalCost)}</div>
-          <div className="metric-sub">{pnlBoxes.length} of {boxes.length} boxes with cards</div>
+          <div className="metric-value">{usd(totalInvested)}</div>
+          <div className="metric-sub">{sealedBoxes} boxes</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Cards market value</div>
@@ -372,11 +467,16 @@ export default function Boxes() {
           <div className="metric-sub">at current prices</div>
         </div>
         <div className="metric-card">
+          <div className="metric-label">Value per box</div>
+          <div className="metric-value gold">{usd(valuePerBox)}</div>
+          <div className="metric-sub">avg pulled per sealed box</div>
+        </div>
+        <div className="metric-card">
           <div className="metric-label">Gross P&L</div>
           <div className="metric-value" style={{ color: totalPnl >= 0 ? 'var(--success)' : 'var(--danger)' }}>
             {fmtPnl(totalPnl)}
           </div>
-          <div className="metric-sub">unrealized</div>
+          <div className="metric-sub">unrealized, before fees & shipping</div>
         </div>
       </div>
 
@@ -386,10 +486,10 @@ export default function Boxes() {
         <div>
           {loading ? (
             <div className="loading">Loading boxes…</div>
-          ) : boxes.length === 0 ? (
+          ) : visibleBoxes.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon">📦</div>
-              No boxes yet — add one to start tracking P&L.
+              {boxes.length === 0 ? 'No boxes yet — add one to start tracking P&L.' : 'All boxes are excluded from P&L — tick "Show excluded" to see them.'}
             </div>
           ) : (
             <div className="panel">
@@ -416,7 +516,7 @@ export default function Boxes() {
                 <thead>
                   <tr>
                     <th>Box</th>
-                    {!selected && <th style={{ whiteSpace: 'nowrap' }}>Type</th>}
+                    {!selected && <th style={{ whiteSpace: 'nowrap' }}>Boxes</th>}
                     <th className="text-right" style={{ whiteSpace: 'nowrap' }}>Cost</th>
                     {!selected && <th className="text-right" style={{ whiteSpace: 'nowrap' }}>Card value</th>}
                     <th className="text-right" style={{ whiteSpace: 'nowrap' }}>P&L</th>
@@ -431,6 +531,7 @@ export default function Boxes() {
                         cursor: 'pointer',
                         background: selected === box.id ? 'var(--bg-hover)' : undefined,
                         borderLeft: selected === box.id ? '2px solid var(--gold)' : '2px solid transparent',
+                        opacity: box.exclude_from_pnl ? 0.45 : undefined,
                       }}
                       onClick={() => setSelected(selected === box.id ? null : box.id)}
                     >
@@ -438,14 +539,22 @@ export default function Boxes() {
                         <div className="name-cell" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {box.name ?? box.set_name}
                         </div>
-                        <div className="set-cell">{selected ? box.box_type?.replace(/_/g, ' ') : date(box.purchased_at)}</div>
+                        <div className="set-cell">
+                          {selected ? box.box_type?.replace(/_/g, ' ') : date(box.purchased_at)}
+                          {box.exclude_from_pnl ? ' · excluded' : ''}
+                        </div>
                       </td>
                       {!selected && (
-                        <td className="text-muted" style={{ fontSize: 12 }}>
-                          {box.box_type?.replace(/_/g, ' ')}
+                        <td className="text-muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                          {box.box_count} × {packsPerBox(box)} packs
                         </td>
                       )}
-                      <td className="text-right">{usd(box.purchase_price)}</td>
+                      <td className="text-right">
+                        {usd(box.purchase_price)}
+                        {box.box_count > 1 && (
+                          <div className="text-muted" style={{ fontSize: 11 }}>{usd(Number(box.purchase_price || 0) / box.box_count)}/box</div>
+                        )}
+                      </td>
                       {!selected && <td className="text-right text-gold">{usd(box.cards_market_value)}</td>}
                       <td className="text-right">
                         <span style={{ color: Number(box.gross_pnl) >= 0 ? 'var(--success)' : 'var(--danger)' }}>
@@ -479,7 +588,7 @@ export default function Boxes() {
                   <button className="btn btn-ghost btn-sm" onClick={() => setPage(0)} disabled={safePage === 0}>«</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0}>‹ Prev</button>
                   <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    Page {safePage + 1} of {totalPages} · {boxes.length} boxes
+                    Page {safePage + 1} of {totalPages} · {visibleBoxes.length} entries
                   </span>
                   <button className="btn btn-ghost btn-sm" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={safePage === totalPages - 1}>Next ›</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => setPage(totalPages - 1)} disabled={safePage === totalPages - 1}>»</button>
@@ -497,14 +606,42 @@ export default function Boxes() {
                 <div>
                   <div className="panel-title">{selectedBox?.name ?? selectedBox?.set_name} — Cards pulled</div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                    {selectedBox?.box_type?.replace(/_/g, ' ')} · {usd(selectedBox?.purchase_price)} cost
+                    {selectedBox?.box_count ?? 1} box{(selectedBox?.box_count ?? 1) !== 1 ? 'es' : ''} · {selectedBox?.pack_count ?? '—'} packs · {usd(selectedBox?.purchase_price)}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {hasTracking && (
+                    <button className="btn btn-ghost btn-sm" onClick={toggleExcluded}>
+                      {selectedBox?.exclude_from_pnl ? 'Include in P&L' : 'Exclude from P&L'}
+                    </button>
+                  )}
+                  <button className="btn btn-ghost btn-sm" onClick={() => openEditModal(selected)}>Edit box</button>
                   <button className="btn btn-primary btn-sm" onClick={openPullModal}>+ Log pull</button>
                   <button className="btn btn-ghost btn-sm" onClick={() => setSelected(null)}>✕</button>
                 </div>
               </div>
+
+              {hasTracking && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+                  <label className="form-label" style={{ margin: 0, whiteSpace: 'nowrap' }}>Boxes in this entry</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min="1"
+                    value={boxCountDraft}
+                    onChange={e => setBoxCountDraft(e.target.value)}
+                    style={{ width: 72 }}
+                  />
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={saveBoxCount}
+                    disabled={boxCountSaving || !(parseInt(boxCountDraft) >= 1) || parseInt(boxCountDraft) === selectedBox?.box_count}
+                  >
+                    {boxCountSaving ? 'Saving…' : 'Save'}
+                  </button>
+                  <span className="text-muted" style={{ fontSize: 11 }}>{packsPerBox(selectedBox)} packs per box</span>
+                </div>
+              )}
 
               {/* Box P&L summary */}
               {(() => {
@@ -615,12 +752,12 @@ export default function Boxes() {
         )}
       </div>
 
-      {/* ── Add box modal ───────────────────────────────────────────────────── */}
+      {/* ── Add / edit box modal ────────────────────────────────────────────── */}
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <span className="modal-title">Add box</span>
+              <span className="modal-title">{editing ? 'Edit box' : 'Add box'}</span>
               <button className="btn btn-ghost btn-sm" onClick={() => setModal(false)}>✕</button>
             </div>
             <div className="modal-body">
@@ -632,6 +769,7 @@ export default function Boxes() {
                 <div className="form-group">
                   <label className="form-label">Set</label>
                   <select className="form-select" value={form.set_name} onChange={f('set_name')}>
+                    {form.set_name && !config.sets.includes(form.set_name) && <option>{form.set_name}</option>}
                     {config.sets.map(s => <option key={s}>{s}</option>)}
                   </select>
                 </div>
@@ -644,29 +782,43 @@ export default function Boxes() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Purchase price ($) *</label>
-                  <input className="form-input" type="number" step="0.01" value={form.purchase_price} onChange={f('purchase_price')} placeholder="e.g. 180.00" />
+                  <label className="form-label">Total purchase price ($) *</label>
+                  <input className="form-input" type="number" step="0.01" value={form.purchase_price} onChange={f('purchase_price')} placeholder="e.g. 340.00" />
                 </div>
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label className="form-label">Pack count</label>
-                  <input className="form-input" type="number" value={form.pack_count} onChange={f('pack_count')} placeholder="36" />
+                  <label className="form-label">Number of boxes</label>
+                  <input className="form-input" type="number" min="1" value={form.box_count} onChange={f('box_count')} placeholder="1" />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Pack MSRP ($)</label>
-                  <input className="form-input" type="number" step="0.01" value={form.pack_msrp} onChange={f('pack_msrp')} placeholder="5.00" />
+                  <label className="form-label">Packs per box</label>
+                  <input className="form-input" type="number" min="1" value={form.packs_per_box} onChange={f('packs_per_box')} placeholder="36" />
                 </div>
               </div>
+              {(() => {
+                const n = parseInt(form.box_count) || 1
+                const total = n * (parseInt(form.packs_per_box) || 36)
+                return (
+                  <div className="text-muted" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>
+                    {total} packs total
+                    {n > 1 && form.purchase_price ? ` · ${usd(Number(form.purchase_price) / n)} per box` : ''}
+                  </div>
+                )
+              })()}
               <div className="form-row">
                 <div className="form-group">
                   <label className="form-label">Purchase date</label>
                   <input className="form-input" type="date" value={form.purchased_at} onChange={f('purchased_at')} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Seller / source</label>
-                  <input className="form-input" value={form.seller} onChange={f('seller')} placeholder="e.g. local game store" />
+                  <label className="form-label">Pack MSRP ($)</label>
+                  <input className="form-input" type="number" step="0.01" value={form.pack_msrp} onChange={f('pack_msrp')} placeholder="5.00" />
                 </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Seller / source</label>
+                <input className="form-input" value={form.seller} onChange={f('seller')} placeholder="e.g. local game store" />
               </div>
               <div className="form-group">
                 <label className="form-label">Notes</label>
@@ -676,7 +828,7 @@ export default function Boxes() {
             <div className="modal-footer">
               <button className="btn" onClick={() => setModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={save} disabled={!form.purchase_price || saving}>
-                {saving ? 'Saving…' : 'Add box'}
+                {saving ? 'Saving…' : editing ? 'Save changes' : 'Add box'}
               </button>
             </div>
           </div>
