@@ -15,6 +15,11 @@ Realtime, and Edge Functions) — no separate backend.
 - Retrieval-augmented rules chatbot (OpenAI embeddings + Anthropic)
 - Multi-game support with per-game vocabulary (rarities, sets, card types)
 
+## Related
+
+- Live site: [satorntcg.com](https://satorntcg.com)
+- [satorntcg-mcpserver](https://github.com/satorntcg/satorntcg-mcpserver): an MCP server that exposes this platform's data as tools for AI assistants, with OpenTelemetry tracing, tests, and LLM evals
+
 ## Stack
 
 React 18 · Vite · react-router-dom · Supabase · Recharts
@@ -26,4 +31,4 @@ sample only — see [LICENSE](LICENSE) for terms.
 
 ## Author
 
-Christopher Rogers ([satorntcg](https://github.com/satorntcg))
+Christopher Rogers ([satorntcg](https://github.com/satorntcg)) · [crogers.dev](https://www.crogers.dev)
